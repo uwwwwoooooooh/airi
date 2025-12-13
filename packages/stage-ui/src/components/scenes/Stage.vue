@@ -27,6 +27,7 @@ import { EMOTION_EmotionMotionName_value, EMOTION_VRMExpressionName_value, Emoti
 import { useAudioContext, useSpeakingStore } from '../../stores/audio'
 import { useChatStore } from '../../stores/chat'
 import { useLive2d } from '../../stores/live2d'
+import { useMemoryStore } from '../../stores/memory'
 import { useSpeechStore } from '../../stores/modules/speech'
 import { useProvidersStore } from '../../stores/providers'
 import { useSettings } from '../../stores/settings'
@@ -42,7 +43,7 @@ withDefaults(defineProps<{
 
 const componentState = defineModel<'pending' | 'loading' | 'mounted'>('state', { default: 'pending' })
 
-const db = ref<DuckDBWasmDrizzleDatabase>()
+const memoryStore = useMemoryStore()
 // const transformersProvider = createTransformers({ embedWorkerURL })
 
 const vrmViewerRef = ref<InstanceType<typeof ThreeScene>>()
@@ -76,7 +77,8 @@ const { mouthOpenSize } = storeToRefs(useSpeakingStore())
 const { audioContext, calculateVolume } = useAudioContext()
 connectAudioContext(audioContext)
 
-const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd, clearHooks } = useChatStore()
+const chatStore = useChatStore()
+const { onBeforeMessageComposed, onBeforeSend, onTokenLiteral, onTokenSpecial, onStreamEnd, onAssistantResponseEnd, clearHooks } = chatStore
 // WORKAROUND: clear previous hooks to avoid duplicate calls
 //             due to re-mounting of this component when switching routes and stages.
 //            See the comment above for more details.
@@ -247,7 +249,62 @@ function setupAnalyser() {
   }
 }
 
-onBeforeMessageComposed(async () => {
+async function handleMemoryRetrieval(message: string) {
+  try {
+    if (memoryStore.isEnabled && message && message.trim().length > 0) {
+      const embedding = await memoryStore.generateEmbedding(message)
+      const results = await memoryStore.searchMemory(embedding, 5)
+
+      if (results && results.length > 0) {
+        // Filter by score to remove irrelevant memories
+        // Also filter out exact matches (score ~1.0) which are likely the user's current query being recalled
+        const threshold = memoryStore.minSimilarityScore
+        const relevantMemories = results.filter((r: any) => {
+          const score = r.score ?? 0
+          return score > threshold && score < 0.99
+        })
+
+        if (relevantMemories.length > 0) {
+          const memories = relevantMemories.map((r: any) => `- ${r.content} (Confidence: ${r.score?.toFixed(2)})`).join('\n')
+
+          // Inject into chat history as a system message
+          chatStore.messages.push({
+            role: 'system',
+            content: `Here are memories relevant to the current conversation. Treat them as FACTS.
+
+Memories:
+${memories}
+
+Instruction:
+1. "User:" prefixes represent things the user said. "AI:" prefixes represent things YOU said previously.
+2. Use the above memories to answer the user's question.
+3. If a memory says "I don't know" but another memory contains the answer, IGNORE the "I don't know" and use the answer.`,
+            context: {
+              sessionId: chatStore.activeSessionId,
+              source: 'system',
+              ts: Date.now(),
+            },
+          })
+        }
+      }
+    }
+  }
+  catch (error) {
+    console.error('RAG Retrieval failed:', error)
+  }
+}
+
+async function saveUserMessageToMemory(message: string) {
+  // Save the USER'S message to memory (fire and forget to avoid blocking)
+  if (memoryStore.isEnabled && message && message.trim().length > 0) {
+    const memoryContent = `User: ${message}`
+    memoryStore.generateEmbedding(memoryContent)
+      .then(embedding => memoryStore.addMemory(memoryContent, embedding))
+      .catch(err => console.error('[Memory] Failed to save user message:', err))
+  }
+}
+
+onBeforeMessageComposed(async (message) => {
   clearAll()
   setupAnalyser()
   setupLipSync()
@@ -255,6 +312,10 @@ onBeforeMessageComposed(async () => {
   assistantCaption.value = ''
   postCaption({ type: 'caption-assistant', text: '' })
   postPresent({ type: 'assistant-reset' })
+
+  // Memory Retrieval (RAG)
+  await handleMemoryRetrieval(message)
+  saveUserMessageToMemory(message)
 })
 
 onBeforeSend(async () => {
@@ -278,12 +339,16 @@ onStreamEnd(async () => {
 })
 
 onAssistantResponseEnd(async (_message) => {
-  // const res = await embed({
-  //   ...transformersProvider.embed('Xenova/nomic-embed-text-v1'),
-  //   input: message,
-  // })
-
-  // await db.value?.execute(`INSERT INTO memory_test (vec) VALUES (${JSON.stringify(res.embedding)});`)
+  try {
+    if (memoryStore.isEnabled) {
+      const memoryContent = `AI: ${_message}`
+      const embedding = await memoryStore.generateEmbedding(memoryContent)
+      await memoryStore.addMemory(memoryContent, embedding)
+    }
+  }
+  catch (error) {
+    console.error('Failed to save memory:', error)
+  }
 })
 
 onUnmounted(() => {
@@ -291,8 +356,7 @@ onUnmounted(() => {
 })
 
 onMounted(async () => {
-  db.value = drizzle({ connection: { bundles: getImportUrlBundles() } })
-  await db.value.execute(`CREATE TABLE memory_test (vec FLOAT[768]);`)
+  await memoryStore.init()
 })
 
 function canvasElement() {
