@@ -32,7 +32,8 @@
     "./workers/vad": "./src/workers/vad/index.ts",
     "./workers/*": "./src/workers/*.ts",
     "./workers": "./src/workers/index.ts",
-    "./utils": "./src/utils/index.ts"
+    "./utils": "./src/utils/index.ts",
+    "./utils/tts": "./src/utils/tts.ts"
   },
   "scripts": {
     "typecheck": "vue-tsc --noEmit",
@@ -73,6 +74,7 @@
     "@proj-airi/font-cjkfonts-allseto": "workspace:^",
     "@proj-airi/font-xiaolai": "workspace:^",
     "@proj-airi/i18n": "workspace:^",
+    "@proj-airi/model-driver-lipsync": "workspace:^",
     "@proj-airi/server-sdk": "workspace:^",
     "@proj-airi/stage-shared": "workspace:^",
     "@proj-airi/stage-ui-three": "workspace:^",

@@ -3,7 +3,7 @@ import type { Application } from '@pixi/app'
 
 import type { PixiLive2DInternalModel } from '../../../composables/live2d'
 
-import { listenBeatSyncBeatSignal } from '@proj-airi/stage-shared/beat-sync/browser'
+import { listenBeatSyncBeatSignal } from '@proj-airi/stage-shared/beat-sync'
 import { useTheme } from '@proj-airi/ui'
 import { breakpointsTailwind, until, useBreakpoints, useDebounceFn } from '@vueuse/core'
 import { formatHex } from 'culori'
@@ -393,7 +393,7 @@ function updateDropShadowFilter() {
   model.value.filters = [dropShadowFilter.value]
 }
 
-watch([() => props.width, () => props.height], () => handleResize())
+watch([() => props.width, () => props.height], handleResize)
 watch(modelSrcRef, async () => await loadModel(), { immediate: true })
 watch(dark, updateDropShadowFilter, { immediate: true })
 watch([model, themeColorsHue], updateDropShadowFilter)
